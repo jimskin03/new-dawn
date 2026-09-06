@@ -1,0 +1,53 @@
+NEW DAWN / SHELTER 07
+====================
+
+Double-click NewDawn.exe. Keep NewDawn.pck beside it.
+No separate Godot or Blender installation is required to play this build.
+
+THE GOAL
+Restore the long-range relay and survive until day 7.
+One day lasts 90 seconds. Use 4x speed for a shorter session.
+
+GET STARTED
+1. Open Map and dispatch your two available survivors to the depot.
+2. Select the empty bottom-right room and build a Research Lab (140 scrap).
+3. When the room and expedition are finished, select the lab and press +.
+4. Open Research: complete Closed-loop systems, then the Long-range relay.
+5. Fortify before each raid and repair shelter damage when needed.
+
+CONTROLS
+Mouse: select rooms, buttons and tabs.
+Mouse wheel or depth arrows: move through five underground floors.
+Space: pause/resume. 1/2/3: 1x/2x/4x simulation speed.
+B: Build. P: People. R: Research. M: Map. S: Save.
+Escape: help/close. F11: fullscreen.
+The ? button explains the game. Menu pauses the simulation.
+
+MANAGEMENT
+The first four rooms each have a worker. Two survivors start available.
+Production and survivor consumption continue while the game runs.
+Each room accepts up to three workers; sleeping quarters need none.
+Each expedition reserves two available workers and costs 12 food.
+New rooms take 14 seconds to build and start unstaffed.
+Medical bays restore morale and integrity while staffed and powered.
+Workshops produce scrap; guards in security rooms increase defense.
+Research needs a powered lab and at least one assigned scientist.
+Fortifying costs 30 energy and adds 45 defense for the next raid.
+Repairs cost 35 scrap and restore 25 integrity.
+Zero morale or integrity ends the run.
+
+SAVE
+Autosave runs every 20 seconds and when you close the game.
+The save is in your Windows roaming application-data folder, under
+Godot\app_userdata\New Dawn [em dash] Shelter 07\shelter_07.json.
+Use the in-game Menu to save, load or start a new shelter.
+No offline catch-up is applied: a closed game does not consume resources.
+
+This is a single-player prototype with original Blender-rendered dioramas.
+See the source project's README for editing and rebuilding instructions.
+
+AGENT PLAY
+Run Agent Play.cmd to open/attach a visible GUI with live agent controls.
+In PowerShell: .\tools\agent.ps1 status -Full
+Read docs\AGENT_PLAY.md for the complete CLI, JSON protocol, and play strategy.
+The GUI and CLI share the same running shelter. New agent launches start paused.

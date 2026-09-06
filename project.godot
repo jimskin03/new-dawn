@@ -1,0 +1,27 @@
+; New Dawn - Blender-rendered shelter survival game.
+config_version=5
+
+[application]
+config/name="New Dawn — Shelter 07"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.4", "GL Compatibility")
+config/icon="res://assets/icon.svg"
+
+[display]
+window/size/viewport_width=1600
+window/size/viewport_height=1000
+window/size/window_width_override=1440
+window/size/window_height_override=900
+window/size/min_width=960
+window/size/min_height=600
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/default_filters/use_nearest_mipmap_filter=false
+environment/defaults/default_clear_color=Color(0.028, 0.045, 0.052, 1)
+
+[audio]
+driver/enable_input=false

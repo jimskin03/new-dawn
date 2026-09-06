@@ -1,0 +1,7 @@
+.godot/
+build/
+*.blend1
+*.tmp
+.agent/
+*.import
+*.uid
