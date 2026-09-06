@@ -134,7 +134,7 @@ static func validate_action(action: String, args: Dictionary) -> String:
   if key not in schema[action]:return "Unexpected argument: "+str(key)
  for key in schema[action]:
   if not args.has(key):return "Missing argument: "+key
- if args.has("room") and (not integer(args.room) or args.room<0 or args.room>9):return "room must be an integer from 0 to 9."
+ if args.has("room") and (not integer(args.room) or (args.room<0 and not (action=="select" and int(args.room)==-1)) or args.room>9):return "room must be an integer from 0 to 9."
  if action=="assign" and (not integer(args.delta) or int(args.delta) not in [-1,1]):return "delta must be -1 or 1."
  if action=="build" and (not args.kind is String or args.kind not in Sim.ROOM_TYPES or args.kind=="command"):return "Unknown buildable room type."
  if action=="expedition" and args.route not in ["depot","reservoir","outpost"]:return "Unknown expedition route."
@@ -224,7 +224,7 @@ func _execute(action: String, args: Dictionary) -> String:
    if game.modal!="":return "Dismiss the modal before stepping."
    if game.sim.outcome!="":return "The run has ended."
    game.sim.tick(float(args.seconds));game.sync_outcome()
-  "select":game.select_room(int(args.room));game.depth=clampi(int(args.room/2)-2,0,2)
+  "select":game.select_room(int(args.room));if int(args.room)>=0:game.depth=clampi(int(args.room/2)-2,0,2)
   "tab":game.set_tab(args.name)
   "depth":game.depth=int(args.value)
   "dismiss":

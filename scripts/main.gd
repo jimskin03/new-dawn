@@ -272,10 +272,15 @@ func _input(event: InputEvent) -> void:
      drag_candidate_id=int(clicked_char.id);drag_start_pos=mouse
     else:
      drag_candidate_id=-1
-    for i in range(hitboxes.size()-1,-1,-1):
-     if hitboxes[i].rect.has_point(mouse):
-      var callback: Callable=hitboxes[i].action
-      callback.call();play_click();break
+     var hit_found=false
+     for i in range(hitboxes.size()-1,-1,-1):
+      if hitboxes[i].rect.has_point(mouse):
+       var callback: Callable=hitboxes[i].action
+       callback.call();play_click();hit_found=true;break
+     if not hit_found and modal=="" and tab=="Shelter" and mouse.y>54 and mouse.y<938:
+      var clicked_room=_get_room_at(mouse)
+      if clicked_room==-1 and (mouse.x<1142 or (mouse.y>260 and (selected==-1 or mouse.y<500))):
+       selected=-1
   else:
    if event.button_index==MOUSE_BUTTON_LEFT:
     if dragging_char_id!=-1:
@@ -624,111 +629,138 @@ func draw_room(index: int, r: Rect2) -> void:
 
 func draw_sidebar() -> void:
  var x=1142.0;var w=438.0
- box(Rect2(x,60,w,208),Color("0b1215"),Color("25353d"),8,2)
- icon("survivors",Vector2(x+30,88),Color("e2e8f0"),1.1)
- txt("%d/12" % sim.survivors,x+58,91,20,INK)
- txt("PEOPLE",x+58,106,9,MUTED)
- icon("heart",Vector2(x+30,132),RED,1.1)
- var morale_net="-2" if sim.morale<50 else "+1"
- txt(morale_net,x+56,137,15,INK)
- meter(x+95,130,230,sim.morale/100.0,Color("22d3ee"),7)
- txt("MORALE",x+335,137,9,MUTED)
- txt("%d%%" % int(sim.morale),x+386,137,11,Color("22d3ee"))
- icon("shield",Vector2(x+30,172),Color("94a3b8"),1.1)
- var int_net="-4" if sim.integrity<100 else "0"
- txt(int_net,x+56,177,15,INK)
- meter(x+95,170,230,sim.integrity/100.0,Color("22d3ee") if sim.integrity>40 else RED,7)
- txt("INTEGRITY",x+335,177,9,MUTED)
- txt("%d%%" % int(sim.integrity),x+386,177,11,Color("22d3ee") if sim.integrity>40 else RED)
- icon("raid",Vector2(x+30,218),Color("94a3b8"),1.1)
- var raid_txt="RAID IN %ds" % ceili(sim.raid_in)
- txt(raid_txt,x+58,224,15,RED if sim.raid_in<20 else INK)
- if sim.braced:txt("FORTIFIED",x+240,224,11,TEAL)
+ box(Rect2(x,58,w,202),Color("0b1215"),Color("25353d"),8,2)
  if sim.missions.size()>0:
   var m: Dictionary=sim.missions[0]
   var can_claim=float(m.current)>=float(m.target) and not bool(m.claimed)
+  var prog=clampf(float(m.current)/maxf(1.0,float(m.target)),0.0,1.0)
+  txt("MISSION: "+m.title,x+16,76,11,TEAL)
   if can_claim:
-   button(Rect2(x+18,238,w-36,26),"★ CLAIM MISSION: "+m.title,func():action(sim.claim_mission(m.id));play_sound("coin");spawn_floating_text("+%d Scrap" % m.scrap,mouse,GOLD),true,false,"Claim reward",11)
+   button(Rect2(x+w-124,63,110,24),"★ CLAIM +%d🔩" % int(m.scrap),func():action(sim.claim_mission(m.id));play_sound("coin");spawn_floating_text("+%d Scrap" % m.scrap,mouse,GOLD),true,false,"Claim reward",10)
+  else:
+   txt("+%d🔩" % int(m.scrap),x+w-56,76,11,GOLD)
+  meter(x+16,85,w-32,prog,TEAL,3)
+ else:
+  var obj=sim.objective()
+  txt("OBJECTIVE: "+obj.title,x+16,76,11,GOLD)
+  meter(x+16,85,w-32,obj.progress,GOLD,3)
 
- var tab_border=Color("22d3ee") if tab=="Shelter" else Color("2a3f47")
- box(Rect2(x,276,w,646),Color("0a1215"),tab_border,8,2)
+ draw_line(Vector2(x+16,95),Vector2(x+w-16,95),Color("1e2c33"),1)
+ icon("survivors",Vector2(x+26,112),Color("e2e8f0"),0.9)
+ txt("%d/%d" % [sim.survivors,sim.capacity()],x+44,116,13,INK)
+ txt("PEOPLE",x+92,116,9,MUTED)
+ meter(x+140,111,w-156,float(sim.survivors)/maxf(1.0,float(sim.capacity())),Color("38bdf8"),4)
+
+ icon("heart",Vector2(x+26,134),RED,0.9)
+ txt("%d%%" % int(sim.morale),x+44,138,13,INK)
+ txt("MORALE",x+92,138,9,MUTED)
+ meter(x+140,133,w-156,sim.morale/100.0,Color("22d3ee"),4)
+
+ icon("shield",Vector2(x+26,156),Color("94a3b8"),0.9)
+ txt("%d%%" % int(sim.integrity),x+44,160,13,INK)
+ txt("INTEGRITY",x+92,160,9,MUTED)
+ meter(x+140,155,w-156,sim.integrity/100.0,Color("22d3ee") if sim.integrity>40 else RED,4)
+
+ draw_line(Vector2(x+16,171),Vector2(x+w-16,171),Color("1e2c33"),1)
+ icon("raid",Vector2(x+26,189),Color("94a3b8"),0.9)
+ var raid_txt="RAID IN %ds" % ceili(sim.raid_in)
+ txt(raid_txt,x+44,193,13,RED if sim.raid_in<20 else INK)
+ txt("DEF %d" % sim.defense(),x+170,193,11,Color("22d3ee"))
+ button(Rect2(x+w-192,180,90,26),"Fortify · 30",func():action(sim.brace()),false,sim.braced or sim.stock.energy<30,"+45 defense for next raid",11)
+ button(Rect2(x+w-96,180,82,26),"Repair · 35",func():action(sim.repair()),false,sim.integrity>=100 or sim.stock.scrap<35,"Restore 25 integrity",11)
+ button(Rect2(x+16,218,(w-40)/2,24),"⚡ Overclock · 25⏻",func():action(sim.use_ability("overclock",selected if selected>=0 else 0)),false,sim.stock.energy<25 or float(sim.abilities.get("overclock",{}).get("timer",0.0))>0,"200% production boost for 20s",10)
+ button(Rect2(x+16+(w-40)/2+8,218,(w-40)/2,24),"🍽 Rationing",func():action(sim.use_ability("rationing")),false,float(sim.abilities.get("rationing",{}).get("timer",0.0))>0,"Halve food & water for 30s",10)
+
  match tab:
-  "Build":draw_build(x)
-  "People":draw_people(x)
-  "Research":draw_research(x)
-  "Map":draw_map(x)
-  _:draw_inspector(x)
+  "Build":
+   box(Rect2(x,270,w,652),Color("0a1215"),Color("2a3f47"),8,2)
+   draw_build(x)
+  "People":
+   box(Rect2(x,270,w,652),Color("0a1215"),Color("2a3f47"),8,2)
+   draw_people(x)
+  "Research":
+   box(Rect2(x,270,w,652),Color("0a1215"),Color("2a3f47"),8,2)
+   draw_research(x)
+  "Map":
+   box(Rect2(x,270,w,652),Color("0a1215"),Color("2a3f47"),8,2)
+   draw_map(x)
+  _:
+   draw_inspector(x)
 
 func draw_inspector(x: float) -> void:
- var r: Dictionary=sim.rooms[selected];var kind: String=r.kind
- if kind=="":
-  txt("EXCAVATED CHAMBER",x+24,308,18,Color("22d3ee"))
-  txt("EXPANSION SITE",x+24,328,10,MUTED)
-  paragraph("An unassigned subterranean chamber ready for construction. Build a room to give your survivors a better tomorrow.",x+24,355,390,14,MUTED,20)
-  draw_texture_rect(textures.empty,Rect2(x+24,430,390,140),false)
-  button(Rect2(x+24,590,390,44),"Choose a room  →",func():set_tab("Build"),true)
+ var w=438.0
+ if selected<0 or selected>=sim.rooms.size():
+  box(Rect2(x,884,w,38),Color("0b1215"),Color("25353d"),6)
+  centered("ℹ Click any room in the shelter to inspect",Rect2(x,884,w,38),11,MUTED)
   return
+ var r: Dictionary=sim.rooms[selected];var kind: String=r.kind
+ var iy=500.0;var ih=422.0
+ box(Rect2(x,iy,w,ih),Color("0a1215"),Color("22d3ee"),8,2)
+ button(Rect2(x+w-30,iy+10,20,20),"×",func():selected=-1,false,false,"Close inspector",13)
+
+ if kind=="":
+  txt("EXCAVATED CHAMBER",x+16,iy+26,17,Color("22d3ee"))
+  txt("Unassigned excavation chamber ready for construction.",x+16,iy+45,11,MUTED)
+  draw_line(Vector2(x+16,iy+55),Vector2(x+w-16,iy+55),Color("1e2c33"),1)
+  draw_texture_rect(textures.empty,Rect2(x+16,iy+70,w-32,150),false)
+  button(Rect2(x+16,iy+240,w-32,54),"+ BUILD A ROOM  →",func():set_tab("Build"),true,false,"Choose a room to construct",14)
+  return
+
  var info: Dictionary=Sim.ROOM_TYPES[kind]
  var room_title=info.name.to_upper()
  if kind=="food":room_title="GREENHOUSE"
  elif kind=="water":room_title="WATER PURIFIER"
- txt(room_title,x+24,308,19,Color("22d3ee"))
- txt("LEVEL %d MODULE" % r.level,x+24,328,10,MUTED)
- draw_line(Vector2(x+24,342),Vector2(x+414,342),Color("1e2c33"),1)
+ txt(room_title+" · LV.%d" % r.level,x+16,iy+26,17,Color("22d3ee"))
+ var role_desc=info.desc.split(".")[0]+"."
+ txt(role_desc,x+16,iy+45,11,MUTED)
+ draw_line(Vector2(x+16,iy+55),Vector2(x+w-16,iy+55),Color("1e2c33"),1)
 
- txt("%d STAFF" % r.workers,x+24,368,16,INK)
- txt("MAX 3 WORKERS",x+24,386,10,MUTED)
+ txt("%d/3 STAFF" % r.workers,x+16,iy+74,13,INK)
  for n in range(3):
-  var px=x+24+n*48
-  box(Rect2(px,402,40,40),Color("122126") if n<r.workers else Color("0e171a"),Color("22d3ee") if n<r.workers else Color("223038"),6)
-  icon("survivors",Vector2(px+20,422),Color("22d3ee") if n<r.workers else Color("3a4c54"),0.75)
- var assigned_chars: Array=[]
- for c in sim.characters:
-  if c.room==selected:assigned_chars.append(c.name)
- if assigned_chars.size()>0:
-  txt("Staff: "+", ".join(assigned_chars),x+24,460,11,MUTED)
+  var spx=x+16+n*44
+  box(Rect2(spx,iy+80,38,38),Color("122126") if n<r.workers else Color("0e171a"),Color("22d3ee") if n<r.workers else Color("223038"),5)
+  icon("survivors",Vector2(spx+19,iy+99),Color("22d3ee") if n<r.workers else Color("3a4c54"),0.7)
 
- draw_line(Vector2(x+24,485),Vector2(x+414,485),Color("1e2c33"),1)
- icon("gear",Vector2(x+38,515),Color("94a3b8"),1.0)
- txt("PRODUCTION RATE",x+56,508,10,MUTED)
+ icon("gear",Vector2(x+165,iy+90),Color("94a3b8"),0.9)
+ txt("PRODUCTION",x+180,iy+85,9,MUTED)
  if info.output!="":
   var rate_h=sim.gross_output(selected)*60.0
-  txt("%.1f /h" % rate_h,x+56,532,18,INK)
-  txt("(+%.2f/s %s)" % [sim.gross_output(selected),info.output],x+148,532,12,Color("22d3ee"))
+  txt("%.1f /h" % rate_h,x+180,iy+103,15,INK)
+  txt("(+%.2f/s)" % sim.gross_output(selected),x+235,iy+103,11,Color("22d3ee"))
  elif kind=="lab":
-  txt("%d Scientist(s) Active" % sim.scientist_count(),x+56,532,15,Color("22d3ee"))
+  txt("%d Scientist(s)" % sim.scientist_count(),x+180,iy+103,13,Color("22d3ee"))
  elif kind=="security":
-  txt("+%d Defense Boost" % (18*r.workers*r.level),x+56,532,15,Color("22d3ee"))
+  txt("+%d Defense" % (18*r.workers*r.level),x+180,iy+103,13,Color("22d3ee"))
  else:
-  txt("+%d Capacity" % (4*int(r.level)),x+56,532,15,Color("22d3ee"))
+  txt("+%d Capacity" % (4*int(r.level)),x+180,iy+103,13,Color("22d3ee"))
 
- draw_line(Vector2(x+24,555),Vector2(x+414,555),Color("1e2c33"),1)
- button(Rect2(1360,568,68,50),"−",func():action(sim.assign(selected,-1)),false,r.workers==0,"Return a survivor to available pool",22)
- button(Rect2(1440,568,68,50),"+",func():action(sim.assign(selected,1)),false,r.workers>=3 or sim.idle_workers()==0,"Assign an available survivor",22)
- txt("ASSIGN SURVIVOR",x+24,584,12,MUTED)
- txt("%d idle available" % sim.idle_workers(),x+24,604,11,Color("22d3ee"))
-
- var up_cost=sim.upgrade_cost(selected)
- var can_up=r.level<3 and sim.stock.scrap>=up_cost and r.build_left<=0
- var up_lbl="UPGRADE TO LEVEL %d\n⚙ %d SCRAP" % [r.level+1,up_cost] if r.level<3 else "MAXIMUM LEVEL REACHED"
- button(Rect2(x+24,634,390,50),up_lbl,func():action(sim.upgrade_room(selected)),can_up,not can_up,"Upgrades increase room output and capacity",13)
+ button(Rect2(1365,570,65,50),"−",func():action(sim.assign(selected,-1)),false,r.workers==0,"Return a survivor to available pool",22)
+ button(Rect2(1440,570,65,50),"+",func():action(sim.assign(selected,1)),false,r.workers>=3 or sim.idle_workers()==0,"Assign an available survivor",22)
 
  var room_em=""
  for em in sim.emergencies:
   if em.room==selected:room_em=em.kind;break
  if room_em!="":
-  box(Rect2(x+24,694,390,38),Color("4a120e"),RED,6)
-  txt("⚠ EMERGENCY: "+room_em.to_upper(),x+36,718,11,INK)
-  button(Rect2(x+276,698,130,30),"Suppress",func():action(sim.suppress_emergency(selected));play_sound("click");spawn_floating_text("Suppressed!",mouse,TEAL),true,false,"Extinguish emergency",11)
+  box(Rect2(x+16,iy+130,w-32,36),Color("4a120e"),RED,6)
+  txt("⚠ EMERGENCY: "+room_em.to_upper(),x+26,iy+153,11,INK)
+  button(Rect2(x+w-130,iy+134,110,28),"Suppress",func():action(sim.suppress_emergency(selected));play_sound("click");spawn_floating_text("Suppressed!",mouse,TEAL),true,false,"Extinguish emergency",11)
 
- draw_line(Vector2(x+24,742),Vector2(x+414,742),Color("1e2c33"),1)
- txt("ENTRANCE DEFENSE",x+24,764,10,MUTED)
- txt(str(sim.defense()),x+358,767,18,Color("22d3ee"))
- txt("Next raid in %ds" % ceili(sim.raid_in),x+24,784,11,RED if sim.raid_in<20 else MUTED)
- button(Rect2(x+24,796,190,40),"Fortify · 30 ⏻",func():action(sim.brace()),false,sim.braced or sim.stock.energy<30,"+45 defense for next raid",12)
- button(Rect2(x+224,796,190,40),"Repair · 35 🔩",func():action(sim.repair()),false,sim.integrity>=100 or sim.stock.scrap<35,"Restore 25 integrity",12)
- button(Rect2(x+24,846,190,34),"⚡ Overclock",func():action(sim.use_ability("overclock",selected)),false,sim.stock.energy<25 or float(sim.abilities.get("overclock",{}).get("timer",0.0))>0,"200% production boost for 20s",11)
- button(Rect2(x+224,846,190,34),"🍽 Rationing",func():action(sim.use_ability("rationing")),false,float(sim.abilities.get("rationing",{}).get("timer",0.0))>0,"Halve food & water use for 30s",11)
+ var up_y=iy+134 if room_em=="" else iy+174
+ var up_cost=sim.upgrade_cost(selected)
+ var can_up=r.level<3 and sim.stock.scrap>=up_cost and r.build_left<=0
+ var up_lbl="UPGRADE TO LEVEL %d  ♦  ⚙ %d SCRAP" % [r.level+1,up_cost] if r.level<3 else "MAXIMUM LEVEL REACHED"
+ button(Rect2(x+16,up_y,w-32,54),up_lbl,func():action(sim.upgrade_room(selected)),can_up,not can_up,"Upgrades increase room output and capacity",14)
+
+ if r.build_left>0:
+  meter(x+16,up_y+62,w-32,1-r.build_left/r.build_total,GOLD,6)
+  txt("Under construction... %ds remaining" % ceili(r.build_left),x+16,up_y+84,11,GOLD)
+
+ var assigned_chars: Array=[]
+ for c in sim.characters:
+  if c.room==selected:assigned_chars.append(c.name)
+ if assigned_chars.size()>0:
+  var staff_y=up_y+68 if r.build_left<=0 else up_y+102
+  txt("Staff on duty: "+", ".join(assigned_chars),x+16,staff_y,11,MUTED)
 
 func draw_build(x: float) -> void:
  txt("CONSTRUCTION CATALOG",x+24,308,18,GOLD)
@@ -926,15 +958,16 @@ func draw_modal() -> void:
 
 func select_room(index: int) -> void:
  selected=index
- if sim.rooms[index].kind=="":tab="Build"
- else:tab="Shelter"
+ if index>=0 and index<sim.rooms.size():
+  if sim.rooms[index].kind=="":tab="Build"
+  else:tab="Shelter"
 
 func set_tab(value: String) -> void:
  if value=="Expedition":tab="Map"
  elif value=="Survivors":tab="People"
  elif value=="Log":modal="journal"
  else:tab=value
- if tab=="Build" and sim.rooms[selected].kind!="":
+ if tab=="Build" and (selected<0 or selected>=sim.rooms.size() or sim.rooms[selected].kind!=""):
   for i in range(sim.rooms.size()):
    if sim.rooms[i].kind=="":selected=i;depth=clampi(int(i/2)-2,0,2);break
 

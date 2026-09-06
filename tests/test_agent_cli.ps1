@@ -115,4 +115,4 @@ if ($report) {
     $report | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'build\agent-test-report.json')
 }
 Write-Output "AGENT_GUI_TESTS: $script:checks checks, $script:failures failures"
-if ($script:failures) {exit 1}
+if ($script:failures) {exit 1} else {exit 0}
