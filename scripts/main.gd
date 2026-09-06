@@ -35,6 +35,15 @@ var captured_outcome = false
 var test_mode = false
 var rocks: Array = []
 var agent_bridge: Node
+var dragging_char_id = -1
+var selected_char_id = -1
+var perk_modal_char_id = -1
+var char_render_pos: Dictionary = {}
+var floating_texts: Array = []
+var screen_shake = 0.0
+var particles: Array = []
+var elevator_y = 365.0
+var rng = RandomNumberGenerator.new()
 
 func _ready() -> void:
  font = load("res://assets/fonts/Inter.woff2")
@@ -77,6 +86,15 @@ func _process(dt: float) -> void:
  if modal=="" and speed>0:sim.tick(dt*speed)
  sync_outcome()
  if save_timer>20 and not test_mode:save_timer=0;save_game(false)
+ if screen_shake>0:screen_shake=maxf(0,screen_shake-dt*6.0)
+ _update_characters(dt)
+ for i in range(floating_texts.size()-1,-1,-1):
+  var ft=floating_texts[i]
+  ft.y-=dt*26.0;ft.time-=dt
+  if ft.time<=0:floating_texts.remove_at(i)
+ _update_particles(dt)
+ if sim.active_encounter.get("pending", false) and modal=="":
+  modal="encounter";play_sound("alarm")
  ui_refresh+=dt
  if ui_refresh>=1.0/30:ui_refresh=0;queue_redraw()
 
@@ -84,25 +102,160 @@ func sync_outcome() -> void:
  if sim.outcome!="" and not captured_outcome:
   captured_outcome=true;modal=sim.outcome;save_game(false)
 
+func _get_character_at(pos: Vector2) -> Dictionary:
+ for c in sim.characters:
+  var p=char_render_pos.get(c.id, Vector2(-1000,-1000))
+  if p.distance_to(pos)<24:return c
+ return {}
+
+func _get_room_at(pos: Vector2) -> int:
+ for row in range(3):
+  var y=365+row*183
+  for col in range(2):
+   var r_rect=Rect2(42+col*505,y,495,176)
+   if r_rect.has_point(pos):
+    return (row+depth)*2+col
+ return -1
+
+func _update_characters(dt: float) -> void:
+ var room_worker_counts={}
+ for c in sim.characters:
+  var r_idx=int(c.room)
+  var target_pos=Vector2(320+c.id*45, 365+(2-depth)*183+146)
+  if c.get("on_expedition", false):
+   target_pos=Vector2(140+c.id*40, 270)
+  elif r_idx>=0 and r_idx<sim.rooms.size():
+   var floor_idx=int(r_idx/2)
+   var row=floor_idx-depth
+   var col=r_idx%2
+   var slot=room_worker_counts.get(r_idx, 0)
+   room_worker_counts[r_idx]=slot+1
+   if row>=0 and row<3:
+    var ry=365+row*183
+    target_pos=Vector2(42+col*505+95+slot*85, ry+146)
+   else:
+    target_pos=Vector2(1085, 365+clampi(row,0,2)*183+75)
+  if not c.id in char_render_pos:
+   char_render_pos[c.id]=target_pos
+  else:
+   var cur: Vector2=char_render_pos[c.id]
+   cur.x=move_toward(cur.x, target_pos.x, dt*130.0*maxf(1,speed))
+   cur.y=move_toward(cur.y, target_pos.y, dt*130.0*maxf(1,speed))
+   char_render_pos[c.id]=cur
+   c["is_moving"]=cur.distance_to(target_pos)>3.0
+   if c["is_moving"]:
+    c["walk_cycle"]=fmod(c.get("walk_cycle", 0.0)+dt*11.0, TAU)
+   else:
+    c["walk_cycle"]=0.0
+  # Ambient speech lines
+  if c.speech=="" and rng.randf()<0.002 and speed>0:
+   var pool=["Grid humming along.","Could use fresh water.","Another shift done.","Watching the entrance."]
+   if sim.stock.water<30:pool=["We are almost out of water!"]
+   elif sim.stock.food<25:pool=["Running on an empty stomach."]
+   elif sim.stock.energy<20:pool=["Lights are dimming!"]
+   c.speech=pool[rng.randi_range(0, pool.size()-1)]
+   c.speech_time=3.5
+
+func _update_particles(dt: float) -> void:
+ for i in range(particles.size()-1,-1,-1):
+  var p=particles[i]
+  p.x+=p.vx*dt;p.y+=p.vy*dt;p.life-=dt
+  if p.life<=0:particles.remove_at(i)
+ # Spawn sparks or fire in rooms with emergencies
+ for em in sim.emergencies:
+  var r_idx=em.room
+  var row=int(r_idx/2)-depth
+  if row>=0 and row<3:
+   var col=r_idx%2
+   var rx=42+col*505;var ry=365+row*183
+   if em.kind=="fire" and particles.size()<60:
+    particles.append({"x":rx+rng.randf_range(30,460),"y":ry+155,"vx":rng.randf_range(-12,12),"vy":rng.randf_range(-35,-70),"life":rng.randf_range(0.4,0.9),"col":Color(1,.55,.1,.8)})
+   elif em.kind=="malfunction" and particles.size()<40:
+    particles.append({"x":rx+rng.randf_range(50,440),"y":ry+rng.randf_range(40,150),"vx":rng.randf_range(-30,30),"vy":rng.randf_range(-30,20),"life":rng.randf_range(0.2,0.45),"col":Color(.6,.9,1,.9)})
+
+func spawn_floating_text(text: String, pos: Vector2, col: Color=GOLD) -> void:
+ floating_texts.append({"text":text,"x":pos.x,"y":pos.y,"time":1.3,"color":col})
+
+func play_sound(type: String="click") -> void:
+ if muted:return
+ var wave=AudioStreamWAV.new();wave.format=AudioStreamWAV.FORMAT_16_BITS;wave.mix_rate=22050
+ var duration_samples=2205;var samples=PackedByteArray()
+ match type:
+  "assign":
+   duration_samples=3300;samples.resize(duration_samples*2)
+   for i in range(duration_samples):
+    var t=float(i)/22050.0;var f=440.0+t*500.0
+    samples.encode_s16(i*2,int(sin(float(i)*TAU*f/22050)*exp(-t*8.0)*4200))
+  "coin":
+   duration_samples=3500;samples.resize(duration_samples*2)
+   for i in range(duration_samples):
+    var t=float(i)/22050.0
+    var v=int((sin(float(i)*TAU*880/22050)*.6+sin(float(i)*TAU*1320/22050)*.4)*exp(-t*9.0)*4400)
+    samples.encode_s16(i*2,v)
+  "alarm":
+   duration_samples=5500;samples.resize(duration_samples*2)
+   for i in range(duration_samples):
+    var t=float(i)/22050.0;var f=330.0 if int(t*10)%2==0 else 240.0
+    samples.encode_s16(i*2,int(sin(float(i)*TAU*f/22050)*4000))
+  "levelup":
+   duration_samples=5500;samples.resize(duration_samples*2)
+   for i in range(duration_samples):
+    var t=float(i)/22050.0;var f=523.25 if t<.08 else (659.25 if t<.16 else 783.99)
+    samples.encode_s16(i*2,int(sin(float(i)*TAU*f/22050)*exp(-fmod(t,.08)*10.0)*4400))
+  "ability":
+   duration_samples=3500;samples.resize(duration_samples*2)
+   for i in range(duration_samples):
+    var t=float(i)/22050.0;var f=750.0-t*400.0
+    samples.encode_s16(i*2,int(sin(float(i)*TAU*f/22050)*exp(-t*6.0)*4200))
+  _:
+   samples.resize(duration_samples*2)
+   for i in range(duration_samples):
+    samples.encode_s16(i*2,int(sin(float(i)*TAU*660/22050)*exp(-float(i)/230.0)*4200))
+ wave.data=samples;audio_player.stream=wave;audio_player.play()
+
+func play_click() -> void:
+ play_sound("click")
+
 func _input(event: InputEvent) -> void:
  if event is InputEventMouseMotion:
   mouse=event.position
   var hover=false
   for hit in hitboxes:
    if hit.rect.has_point(mouse):hover=true;break
+  if dragging_char_id!=-1:hover=true
   mouse_default_cursor_shape=Control.CURSOR_POINTING_HAND if hover else Control.CURSOR_ARROW
- elif event is InputEventMouseButton and event.pressed:
+ elif event is InputEventMouseButton:
   mouse=event.position
-  if event.button_index==MOUSE_BUTTON_WHEEL_DOWN and mouse.x<1140 and modal=="":depth=mini(2,depth+1)
-  elif event.button_index==MOUSE_BUTTON_WHEEL_UP and mouse.x<1140 and modal=="":depth=maxi(0,depth-1)
-  elif event.button_index==MOUSE_BUTTON_LEFT:
-   for i in range(hitboxes.size()-1,-1,-1):
-    if hitboxes[i].rect.has_point(mouse):
-     var callback: Callable=hitboxes[i].action
-     callback.call();play_click();break
+  if event.pressed:
+   if event.button_index==MOUSE_BUTTON_WHEEL_DOWN and mouse.x<1140 and modal=="":depth=mini(2,depth+1)
+   elif event.button_index==MOUSE_BUTTON_WHEEL_UP and mouse.x<1140 and modal=="":depth=maxi(0,depth-1)
+   elif event.button_index==MOUSE_BUTTON_LEFT:
+    var clicked_char=_get_character_at(mouse)
+    if not clicked_char.is_empty() and modal=="":
+     dragging_char_id=int(clicked_char.id);selected_char_id=int(clicked_char.id)
+     play_sound("click");queue_redraw();return
+    for i in range(hitboxes.size()-1,-1,-1):
+     if hitboxes[i].rect.has_point(mouse):
+      var callback: Callable=hitboxes[i].action
+      callback.call();play_click();break
+  else:
+   if event.button_index==MOUSE_BUTTON_LEFT and dragging_char_id!=-1:
+    var target_room=_get_room_at(mouse)
+    if target_room!=-1:
+     var res=sim.assign_character(dragging_char_id, target_room)
+     if res=="":
+      spawn_floating_text("Assigned!", mouse, TEAL);play_sound("assign")
+     else:
+      action(res)
+    elif mouse.x<1140 and mouse.y>120:
+     sim.assign_character(dragging_char_id, -1)
+     spawn_floating_text("Unassigned", mouse, MUTED);play_sound("click")
+    dragging_char_id=-1
   queue_redraw()
  elif event is InputEventKey and event.pressed and not event.echo:
-  if event.keycode==KEY_ESCAPE:modal="" if modal!="" else "help"
+  if event.keycode==KEY_ESCAPE:
+   if modal=="encounter":sim.resolve_encounter(1)
+   modal="" if modal!="" else "help"
   elif modal=="":
    match event.keycode:
     KEY_SPACE:toggle_pause()
@@ -166,6 +319,8 @@ func icon(kind: String,p: Vector2,color: Color=GOLD,scale_v: float=1.0) -> void:
   "scrap","Build":
    draw_line(p+Vector2(-7,10)*s,p+Vector2(5,-5)*s,color,5*s,true)
    draw_colored_polygon(PackedVector2Array([p+Vector2(-3,-12)*s,p+Vector2(12,0)*s,p+Vector2(16,-5)*s,p+Vector2(2,-17)*s]),color)
+  "credits":
+   draw_arc(p,8*s,0,TAU,20,color,2*s,true);draw_arc(p,4.5*s,PI*0.3,TAU*0.85,12,color,2*s,true)
   "People","dorm":
    draw_circle(p+Vector2(0,-7)*s,5*s,color,true,-1,true);draw_arc(p+Vector2(0,10)*s,9*s,PI,TAU,16,color,5*s,true)
   "Research","lab":
@@ -177,19 +332,70 @@ func icon(kind: String,p: Vector2,color: Color=GOLD,scale_v: float=1.0) -> void:
   _:
    draw_arc(p,10*s,0,TAU,24,color,2*s,true);draw_line(p+Vector2(-5,0)*s,p+Vector2(5,0)*s,color,2*s,true);draw_line(p+Vector2(0,-5)*s,p+Vector2(0,5)*s,color,2*s,true)
 
+func _draw_character(c: Dictionary, pos: Vector2, is_working: bool=false, is_panicking: bool=false) -> void:
+ var x=pos.x;var y=pos.y
+ var walk_angle=sin(c.get("walk_cycle", 0.0))*5.0
+ draw_line(Vector2(x-3,y-9),Vector2(x-3-walk_angle,y),Color("1a262c"),3.0,true)
+ draw_line(Vector2(x+3,y-9),Vector2(x+3+walk_angle,y),Color("1a262c"),3.0,true)
+ draw_circle(Vector2(x-3-walk_angle,y),2.2,Color("0c1418"),true,-1,true)
+ draw_circle(Vector2(x+3+walk_angle,y),2.2,Color("0c1418"),true,-1,true)
+ box(Rect2(x-6,y-22,12,14),Color("22363e"),Color("36505a"),3)
+ draw_line(Vector2(x-5,y-11),Vector2(x+5,y-11),GOLD,1.5)
+ draw_circle(Vector2(x,y-28),6.5,Color("344952"),true,-1,true)
+ var hair_col=Color("9e7651") if int(c.id)%2==0 else Color("3a2f2d")
+ draw_arc(Vector2(x,y-29),6.5,PI,TAU,16,hair_col,2.5,true)
+ var visor_col=TEAL if c.get("trait","")!="Engineer" else GOLD
+ draw_line(Vector2(x-3,y-28),Vector2(x+3,y-28),visor_col,2.0,true)
+ if is_working:
+  var tool_y=sin(clock_time*8.0+int(c.id))*3.0
+  draw_line(Vector2(x+6,y-16),Vector2(x+10,y-14+tool_y),GOLD,2.0,true)
+ if mouse.distance_to(pos)<26:
+  var label=str(c.name)+" · "+str(c.get("trait","Survivor"))
+  var lw=font.get_string_size(label,HORIZONTAL_ALIGNMENT_LEFT,-1,11).x+14
+  box(Rect2(x-lw/2,y-48,lw,18),Color("0d181e"),TEAL,4)
+  centered(label,Rect2(x-lw/2,y-48,lw,18),11,INK)
+ if c.get("speech","")!="" and float(c.get("speech_time",0.0))>0:
+  var bubble_w=minf(320,font.get_string_size(c.speech,HORIZONTAL_ALIGNMENT_LEFT,-1,12).x+18)
+  var bx=clampf(x-bubble_w/2,40,1100-bubble_w)
+  var by=y-56
+  box(Rect2(bx,by,bubble_w,22),Color("122228"),TEAL,5)
+  draw_colored_polygon(PackedVector2Array([Vector2(x-3,by+22),Vector2(x+3,by+22),Vector2(x,by+26)]),Color("122228"))
+  centered(c.speech,Rect2(bx,by,bubble_w,22),12,INK)
+
+func _draw_dragged_character() -> void:
+ var c=null
+ for char_obj in sim.characters:
+  if char_obj.id==dragging_char_id:c=char_obj;break
+ if c==null:return
+ var dp=mouse+Vector2(16,-18)
+ box(Rect2(dp.x,dp.y,142,36),Color("142830"),TEAL,7,2)
+ draw_circle(Vector2(dp.x+18,dp.y+18),10,Color("2a434c"),true,-1,true)
+ centered(c.name.left(1),Rect2(dp.x+8,dp.y+8,20,20),14,TEAL)
+ txt(c.name,dp.x+36,dp.y+16,13,INK)
+ txt("LV.%d · %s" % [c.level,c.get("trait","")],dp.x+36,dp.y+30,9,GOLD)
+
 func _draw() -> void:
  if font==null:return
  hitboxes.clear();hover_tip=""
- draw_rect(Rect2(0,0,1600,1000),BG)
+ if screen_shake>0:
+  draw_set_transform(Vector2(rng.randf_range(-screen_shake,screen_shake),rng.randf_range(-screen_shake,screen_shake)),0.0,Vector2.ONE)
+ draw_rect(Rect2(-10,-10,1620,1020),BG)
  draw_header();draw_bunker();draw_sidebar();draw_footer()
  if modal!="":draw_modal()
  if toast_left>0:
   var w=minf(1000,font.get_string_size(toast,HORIZONTAL_ALIGNMENT_LEFT,-1,17).x+46)
   box(Rect2(800-w/2,865,w,48),Color("294740"),TEAL,8);centered(toast,Rect2(800-w/2,865,w,48),17)
+ for ft in floating_texts:
+  var alpha=clampf(ft.time/0.5,0.0,1.0)
+  txt(ft.text,ft.x,ft.y,16,Color(ft.color.r,ft.color.g,ft.color.b,alpha))
+ if dragging_char_id!=-1:
+  _draw_dragged_character()
  if hover_tip!="" and modal=="":
   var w=minf(510,font.get_string_size(hover_tip,HORIZONTAL_ALIGNMENT_LEFT,-1,14).x+28)
   var x=clampf(mouse.x-w/2,14,1586-w);var y=minf(mouse.y+22,964)
   box(Rect2(x,y,w,30),Color("0d181e"),LINE,5);centered(hover_tip,Rect2(x,y,w,30),14,MUTED)
+ if screen_shake>0:
+  draw_set_transform(Vector2.ZERO,0.0,Vector2.ONE)
 
 func draw_header() -> void:
  box(Rect2(28,25,55,55),Color("263b3e"),Color("57716a"),15)
@@ -197,19 +403,23 @@ func draw_header() -> void:
  txt("NEW DAWN",100,51,29)
  txt("S H E L T E R   0 7  /  A S H F A L L   V A L L E Y",101,77,10,MUTED)
  var net=sim.rates();var i=0
- for key in ["energy","food","water","scrap"]:
-  var x=449+i*176
-  box(Rect2(x,23,165,65),PANEL,LINE,9)
-  var col=Color(Sim.ROOM_TYPES[{"energy":"power","food":"food","water":"water","scrap":"workshop"}[key]].color)
-  icon(key,Vector2(x+25,51),col,.85)
-  txt(str(int(sim.stock[key])),x+48,52,24)
-  txt(key.to_upper(),x+48,72,10,MUTED)
-  txt(("+" if net[key]>=0 else "")+"%.1f" % net[key]+"/s",x+108,72,11,col if net[key]>=0 else RED)
-  meter(x+13,81,139,float(sim.stock[key])/sim.max_stock(key),col,2)
+ var res_keys=["energy","water","food","scrap","credits"]
+ for key in res_keys:
+  var x=415+i*153
+  box(Rect2(x,23,145,65),PANEL,LINE,9)
+  var col=GOLD if key=="credits" else Color(Sim.ROOM_TYPES[{"energy":"power","food":"food","water":"water","scrap":"workshop"}[key]].color)
+  icon(key,Vector2(x+22,51),col,.80)
+  txt(str(int(sim.stock[key])),x+42,52,22)
+  txt(key.to_upper(),x+42,72,10,MUTED)
+  if key in net and key!="credits":
+   txt(("+" if net[key]>=0 else "")+"%.1f" % net[key]+"/s",x+95,72,10,col if net[key]>=0 else RED)
+  else:
+   txt("VAULT",x+95,72,10,GOLD)
+  meter(x+10,81,125,float(sim.stock[key])/sim.max_stock(key),col,2)
   i+=1
- draw_circle(Vector2(1181,40),4,TEAL,true,-1,true)
- txt("DAY %02d" % sim.day(),1194,47,18)
- txt("%02d:%02d" % [6+int(fmod(sim.elapsed,90)/90*18),int(fmod(sim.elapsed,5)*12)],1194,71,13,MUTED)
+ draw_circle(Vector2(1185,40),4,TEAL,true,-1,true)
+ txt("DAY %02d" % sim.day(),1198,47,18)
+ txt("%02d:%02d" % [6+int(fmod(sim.elapsed,90)/90*18),int(fmod(sim.elapsed,5)*12)],1198,71,13,MUTED)
  button(Rect2(1312,26,44,54),"Ⅱ" if speed>0 else "▶",toggle_pause,false,false,"Pause / resume · Space",19)
  for n in range(3):
   var val=[1,2,4][n];button(Rect2(1364+n*51,26,45,54),str(val)+"×",func():speed=val,speed==val,false,"Game speed · "+str(n+1),15)
@@ -220,13 +430,39 @@ func draw_bunker() -> void:
  box(Rect2(26,119,1108,804),Color("211e1b"),LINE,12)
  draw_texture_rect(textures.surface,Rect2(27,120,1106,251),false)
  # Soft interface strip over the sky, leaving the entrance visible.
- box(Rect2(45,137,204,30),Color(.06,.10,.12,.85),Color.TRANSPARENT,15)
- draw_circle(Vector2(61,152),3,TEAL,true,-1,true);txt("EXTERIOR / SECTOR 07",73,157,11,INK)
- box(Rect2(935,137,179,30),Color(.06,.10,.12,.85),Color.TRANSPARENT,15)
- txt("CLEAR  /  32°C",956,157,12,INK)
+ box(Rect2(45,137,165,30),Color(.06,.10,.12,.85),Color.TRANSPARENT,15)
+ draw_circle(Vector2(58,152),3,TEAL,true,-1,true);txt("EXTERIOR / SECTOR 07",69,157,11,INK)
+ box(Rect2(950,137,165,30),Color(.06,.10,.12,.85),Color.TRANSPARENT,15)
+ txt("CLEAR  /  32°C",970,157,12,INK)
  if agent_bridge!=null and agent_bridge.active:
-  box(Rect2(272,137,145,30),Color(.06,.10,.12,.85),TEAL,15)
-  draw_circle(Vector2(286,152),3,TEAL,true,-1,true);txt("AGENT CONNECTED",297,157,10,TEAL)
+  box(Rect2(218,137,145,30),Color(.06,.10,.12,.85),TEAL,15)
+  draw_circle(Vector2(230,152),3,TEAL,true,-1,true);txt("AGENT CONNECTED",240,157,10,TEAL)
+ # Command Abilities Bar
+ var ab_names=["overclock","heal","drone","lockdown"]
+ var ab_titles=["⚡ Boost","🚑 Heal","🤖 Drone","🛡 Lock"]
+ var ab_costs=["20⚡","15⚡","20⚡","Free"]
+ for i in range(ab_names.size()):
+  var ab_key=ab_names[i]
+  var ab_obj=sim.abilities.get(ab_key,{})
+  var cd=float(ab_obj.get("cd",0.0))
+  var timer=float(ab_obj.get("timer",0.0))
+  var ab_btn_r=Rect2(372+i*140,137,134,30)
+  var btn_text=ab_titles[i]+" ("+ab_costs[i]+")"
+  var is_disabled=false
+  if timer>0:
+   btn_text="⚡ %ds RUNNING" % ceili(timer)
+  elif cd>0:
+   btn_text="%ds CD" % ceili(cd);is_disabled=true
+  var ab_hint="%s · %s" % [ab_titles[i],ab_costs[i]]
+  button(ab_btn_r,btn_text,func():
+   var err=""
+   if ab_key=="overclock":err=sim.use_ability("overclock",selected)
+   elif ab_key=="lockdown":err=sim.use_ability("lockdown",selected)
+   else:err=sim.use_ability(ab_key)
+   if err=="":
+    play_sound("ability");spawn_floating_text(ab_titles[i]+" ACTIVATED!",mouse,GOLD);screen_shake=4.0
+   else:action(err)
+  ,timer>0,is_disabled,ab_hint,11)
  # Airborne dust glints drift through the surface view.
  for n in range(22):
   var x=40+fmod(n*53.4+clock_time*(5+n%3),1080);var y=193+fmod(n*31.6,157)
@@ -248,21 +484,59 @@ func draw_bunker() -> void:
   box(Rect2(1081,y+75,12,29),Color("0f191b"),Color.TRANSPARENT,2)
   draw_circle(Vector2(1087,y+84),2,TEAL,true,-1,true)
   txt("%02d" % (row+depth+1),1079,y+171,9,MUTED)
+ # Dynamic elevator cab
+ var cab_y=365.0+fmod(clock_time*45.0,183.0*3.0-44.0)
+ box(Rect2(1069,cab_y,36,40),Color("26373d"),GOLD,4,1)
+ draw_line(Vector2(1073,cab_y+20),Vector2(1101,cab_y+20),Color("4a626a"),1.5)
+ draw_circle(Vector2(1087,cab_y+12),3,TEAL,true,-1,true)
+ # Draw emergency particles
+ for p in particles:
+  draw_circle(Vector2(p.x,p.y),2.2,p.col,true,-1,true)
+ # Draw living characters in bunker
+ for c in sim.characters:
+  if c.id==dragging_char_id:continue
+  var p=char_render_pos.get(c.id,Vector2(-1000,-1000))
+  if p.x>30 and p.x<1120 and p.y>120 and p.y<930:
+   var is_working=c.get("state","")=="working"
+   var is_panicking=false
+   for em in sim.emergencies:
+    if em.room==c.room:is_panicking=true;break
+   _draw_character(c,p,is_working,is_panicking)
  # Move through five underground floors, three visible at a time.
  box(Rect2(850,337,264,26),Color(.05,.08,.09,.9),Color.TRANSPARENT,5)
  txt("DEPTH  %02d–%02d" % [depth+1,depth+3],865,355,11,MUTED)
  button(Rect2(995,337,52,26),"↑",func():depth=maxi(0,depth-1),false,depth==0,"Scroll up",15)
  button(Rect2(1053,337,52,26),"↓",func():depth=mini(2,depth+1),false,depth==2,"Scroll down for more chambers",15)
  if sim.raid_in<25:
-  box(Rect2(275,137,461,44),Color("612f27"),RED,7)
-  txt("!   RAIDERS APPROACHING",291,157,14,INK)
-  txt("Impact in %ds · Fortify the entrance" % ceili(sim.raid_in),291,174,11,Color("e8b4a4"))
+  box(Rect2(45,175,345,42),Color("612f27"),RED,7)
+  txt("!   RAIDERS APPROACHING",58,195,13,INK)
+  txt("Impact in %ds · Fortify entrance" % ceili(sim.raid_in),58,210,11,Color("e8b4a4"))
 
 func draw_room(index: int, r: Rect2) -> void:
  var room: Dictionary=sim.rooms[index];var kind: String=room.kind
  var over=r.has_point(mouse);var active=selected==index
  box(r.grow(3),Color("10191c"),GOLD if active else (Color("a9b9b2") if over else Color("56605a")),7,2)
  draw_texture_rect(textures["empty" if kind=="" else kind],r,false)
+ if dragging_char_id!=-1 and over:
+  if kind!="" and room.build_left<=0:
+   box(r.grow(4),Color.TRANSPARENT,TEAL,8,3)
+   box(Rect2(r.position.x+10,r.position.y+10,150,26),Color(.05,.20,.18,.85),TEAL,6)
+   txt("DROP TO ASSIGN",r.position.x+22,r.position.y+27,12,INK)
+  elif kind=="":
+   box(r.grow(4),Color.TRANSPARENT,RED,8,2)
+ var em_kind=""
+ for em in sim.emergencies:
+  if em.room==index:em_kind=em.kind;break
+ if em_kind!="":
+  var pulse=(sin(clock_time*8.0)+1.0)*0.5
+  box(r.grow(4),Color(.5,.1,.05,.20*pulse),RED,8,3)
+  box(Rect2(r.position.x+10,r.position.y+10,135,26),Color("52140e"),RED,6)
+  txt("⚠ "+em_kind.to_upper(),r.position.x+18,r.position.y+27,12,INK)
+  button(Rect2(r.position.x+150,r.position.y+10,95,26),"Suppress",func():action(sim.suppress_emergency(index));play_sound("click");spawn_floating_text("Extinguished!",mouse,TEAL),false,false,"Extinguish emergency",11)
+ var oc=sim.abilities.get("overclock",{})
+ if float(oc.get("timer",0.0))>0 and int(oc.get("room",-1))==index:
+  box(Rect2(r.position.x+10,r.position.y+39,110,22),Color("3d3110"),GOLD,5)
+  txt("⚡ 200% BOOST",r.position.x+18,r.position.y+54,11,GOLD)
  if kind=="":
   draw_rect(r,Color(.03,.07,.09,.45))
   draw_arc(r.get_center()-Vector2(0,12),22,0,TAU,40,TEAL,1.3,true)
@@ -290,12 +564,25 @@ func draw_room(index: int, r: Rect2) -> void:
 
 func draw_sidebar() -> void:
  var x=1154.0
- # Persistent objective and status.
- box(Rect2(x,120,419,128),PANEL,LINE,10)
- txt("OUR NEXT CHAPTER",x+20,146,10,GOLD)
- var obj=sim.objective();txt(obj.title,x+20,174,21)
- paragraph(obj.desc,x+20,198,375,13,MUTED,18)
- meter(x+20,230,378,obj.progress,GOLD,3)
+ # Persistent objective and dynamic missions.
+ box(Rect2(x,120,419,68),PANEL,LINE,10)
+ txt("OUR NEXT CHAPTER",x+20,138,10,GOLD)
+ var obj=sim.objective();txt(obj.title,x+20,158,15)
+ meter(x+20,172,378,obj.progress,GOLD,3)
+ box(Rect2(x,194,419,60),PANEL,LINE,10)
+ if sim.missions.size()>0:
+  var m: Dictionary=sim.missions[0]
+  txt("MISSION: "+m.title,x+20,212,10,TEAL)
+  txt(m.desc,x+20,230,12,INK)
+  meter(x+20,240,270,float(m.current)/maxf(1.0,float(m.target)),TEAL,3)
+  var can_claim=float(m.current)>=float(m.target) and not bool(m.claimed)
+  var btn_lbl="CLAIM" if can_claim else "+%d🔩" % int(m.scrap)
+  button(Rect2(x+300,204,98,38),btn_lbl,func():
+   if can_claim:
+    action(sim.claim_mission(m.id))
+    play_sound("coin")
+    spawn_floating_text("+%d Scrap +%d Cred" % [m.scrap,m.credits],mouse,GOLD)
+  ,can_claim,not can_claim,"Reward: %d Scrap, %d Credits, %d XP" % [m.scrap,m.credits,m.xp],12)
  box(Rect2(x,260,419,96),PANEL,LINE,10)
  icon("People",Vector2(x+27,290),TEAL,.68)
  txt("%d / %d" % [sim.survivors,sim.capacity()],x+47,295,20)
@@ -326,6 +613,13 @@ func draw_inspector(x: float) -> void:
  txt(info.name,x+22,432,25)
  paragraph(info.desc,x+22,461,369,15,MUTED,23)
  draw_line(Vector2(x+22,528),Vector2(x+397,528),LINE,1)
+ var room_em=""
+ for em in sim.emergencies:
+  if em.room==selected:room_em=em.kind;break
+ if room_em!="":
+  box(Rect2(x+22,532,375,28),Color("4a120e"),RED,6)
+  txt("⚠ EMERGENCY: "+room_em.to_upper(),x+32,551,12,INK)
+  button(Rect2(x+270,534,120,24),"Suppress Now",func():action(sim.suppress_emergency(selected));play_sound("click");spawn_floating_text("Extinguished!",mouse,TEAL),true,false,"Suppress emergency",11)
  if r.build_left>0:
   txt("Construction in progress",x+22,560,17,GOLD);meter(x+22,580,375,1-r.build_left/r.build_total,GOLD)
   txt("%d seconds remaining" % ceili(r.build_left),x+22,613,14,MUTED)
@@ -345,6 +639,11 @@ func draw_inspector(x: float) -> void:
   elif kind=="lab":txt("%d scientist(s) · Research tab to begin" % sim.scientist_count(),x+22,680,14,tint)
   elif kind=="security":txt("+%d defense from this room" % (18*r.workers*r.level),x+22,680,16,tint)
   else:txt("Restores morale and shelter integrity",x+22,680,14,tint)
+  var assigned_chars: Array=[]
+  for c in sim.characters:
+   if c.room==selected:assigned_chars.append(c.name)
+  if assigned_chars.size()>0:
+   txt("Staff: "+", ".join(assigned_chars),x+22,700,11,MUTED)
  if r.build_left<=0:
   button(Rect2(x+22,710,375,46),"Upgrade to level %d    /    %d scrap" % [r.level+1,sim.upgrade_cost(selected)] if r.level<3 else "Maximum level reached",func():action(sim.upgrade_room(selected)),true,r.level>=3 or sim.stock.scrap<sim.upgrade_cost(selected),"Upgrades increase production or room effectiveness",15)
  draw_line(Vector2(x+22,776),Vector2(x+397,776),LINE,1)
@@ -372,18 +671,29 @@ func draw_build(x: float) -> void:
 func draw_people(x: float) -> void:
  txt("THE PEOPLE OF SHELTER 07",x+22,399,10,TEAL);txt("Stronger together",x+22,432,25)
  txt("%d available · %d on expedition" % [sim.idle_workers(),2 if not sim.expedition.is_empty() else 0],x+22,460,14,MUTED)
- var names=["Mara","Eli","Jun","Sana","Noah","Iris","Ari","Luca","Rae","Finn"]
- var roles: Array=[]
- for r in sim.rooms:
-  for n in range(int(r.workers)):roles.append(Sim.ROOM_TYPES[r.kind].name)
- if not sim.expedition.is_empty():roles.append("Scavenging expedition");roles.append("Scavenging expedition")
- while roles.size()<sim.survivors:roles.append("Available for assignment")
- for i in range(mini(sim.survivors,7)):
-  var y=484+i*48
-  box(Rect2(x+22,y,37,37),Color("31474c"),LINE,19);centered(names[i%10].left(1),Rect2(x+22,y,37,37),16,TEAL)
-  txt(names[i%10],x+74,y+16,15);txt(roles[i],x+74,y+34,11,MUTED)
- txt("Select a room to assign or release its workers.",x+22,851,12,MUTED)
- txt("Grow your population: build beds, visit the outpost.",x+22,878,12,MUTED)
+ for i in range(mini(sim.characters.size(),6)):
+  var c: Dictionary=sim.characters[i]
+  var y=480+i*58
+  box(Rect2(x+22,y,380,52),Color("15252b"),LINE,7)
+  box(Rect2(x+26,y+5,42,42),Color("2b3f46"),LINE,6)
+  centered(c.name.left(1),Rect2(x+26,y+5,42,42),16,TEAL)
+  txt("%s  ·  Lv.%d" % [c.name,c.level],x+76,y+19,14,INK)
+  txt(c.get("trait","Survivor"),x+200,y+19,10,GOLD)
+  var r_name="Idle"
+  if c.get("on_expedition",false):r_name="Expedition"
+  elif c.room>=0 and c.room<sim.rooms.size() and sim.rooms[c.room].kind!="":r_name=Sim.ROOM_TYPES[sim.rooms[c.room].kind].name
+  txt("%s · S%d I%d A%d C%d E%d" % [r_name,c.str,c.int,c.agi,c.cha,c.end],x+76,y+33,10,MUTED)
+  meter(x+76,y+42,90,c.hp/c.max_hp,Color("76bf86") if c.hp>40 else RED,3)
+  meter(x+172,y+42,90,c.energy/100.0,TEAL,3)
+  if c.level>=2 and c.perks.size()<c.level-1:
+   button(Rect2(x+300,y+10,92,32),"★ Perk",func():perk_modal_char_id=c.id;modal="perk",true,false,"Choose a specialization perk",11)
+  else:
+   var perk_txt="★ %d" % c.perks.size() if c.perks.size()>0 else "Ready"
+   txt(perk_txt,x+330,y+30,11,GOLD if c.perks.size()>0 else MUTED)
+ txt("Drag & drop survivors into rooms to assign jobs.",x+22,842,11,TEAL)
+ txt("Stats boost output: STR->Workshop, INT->Lab/Water, AGI->Food.",x+22,864,10,MUTED)
+ txt("Survivors gain XP, level up, and unlock specialized perks.",x+22,884,10,MUTED)
+
 
 func draw_research(x: float) -> void:
  txt("KNOWLEDGE IS OUR WAY OUT",x+22,399,10,TEAL);txt("A brighter tomorrow",x+22,432,25)
@@ -448,7 +758,7 @@ func draw_modal() -> void:
  hitboxes.clear()
  draw_rect(Rect2(0,0,1600,1000),Color(.018,.035,.044,.86))
  var r=Rect2(446,186,708,626);box(r,PANEL,Color("566762"),14,2)
- button(Rect2(1093,205,39,37),"×",func():modal="",false,false,"Close · Escape",24)
+ button(Rect2(1093,205,39,37),"×",func():if modal=="encounter":sim.resolve_encounter(1);modal="",false,false,"Close · Escape",24)
  if modal=="help":
   txt("WELCOME TO SHELTER 07",484,238,11,GOLD);txt("Keep hope alive.",484,284,35)
   paragraph("Restore the long-range relay and survive until day 7 to guide a rescue convoy home.",484,324,620,19,INK,28)
@@ -489,6 +799,38 @@ func draw_modal() -> void:
   txt("Day %d  /  %d survivors  /  %d raids survived" % [sim.day(),sim.survivors,sim.raids_survived],494,578,17,TEAL)
   button(Rect2(494,635,612,52),"Start another shelter",func():modal="restart",true)
   button(Rect2(494,704,612,45),"Inspect shelter",func():modal="")
+ elif modal=="encounter":
+  var enc: Dictionary=sim.active_encounter
+  txt("WASTELAND ENCOUNTER",484,239,11,GOLD);txt(enc.get("title","Wasteland Event"),484,286,30)
+  paragraph(enc.get("desc","Your scavenging team encountered an unexpected situation in the wasteland."),484,330,620,17,INK,26)
+  button(Rect2(484,480,632,54),enc.get("opt1","Option 1"),func():
+   sim.resolve_encounter(1);modal="";play_sound("coin");spawn_floating_text("Encounter Resolved!",mouse,TEAL)
+  ,true,false,"",15)
+  button(Rect2(484,555,632,54),enc.get("opt2","Option 2"),func():
+   sim.resolve_encounter(2);modal="";play_sound("coin");spawn_floating_text("Encounter Resolved!",mouse,GOLD)
+  ,false,false,"",15)
+ elif modal=="perk":
+  var target_char=null
+  for c in sim.characters:
+   if c.id==perk_modal_char_id:target_char=c;break
+  var char_name=target_char.name if target_char!=null else "Survivor"
+  txt("SPECIALIZATION TRAINING",484,236,11,TEAL)
+  txt(char_name+" · Choose a Perk",484,278,28)
+  paragraph("Select a permanent specialization to adapt this survivor to bunker roles.",484,310,620,14,MUTED,20)
+  var perk_keys=["fast_learner","engineer","green_thumb","medic","scavenger","tough"]
+  for i in range(perk_keys.size()):
+   var p_key=perk_keys[i]
+   var p_info: Dictionary=Sim.PERKS[p_key]
+   var px=484+(i%2)*322;var py=345+int(i/2)*125
+   var has_p=target_char!=null and p_key in target_char.perks
+   box(Rect2(px,py,310,114),Color("15262c"),LINE,8)
+   txt(p_info.name,px+14,py+24,15,GOLD if not has_p else MUTED)
+   paragraph(p_info.desc,px+14,py+46,280,11,MUTED,16)
+   button(Rect2(px+14,py+80,280,26),"Learned" if has_p else "Acquire Perk",func():
+    if not has_p:
+     sim.choose_perk(perk_modal_char_id,p_key)
+     modal="";play_sound("levelup");spawn_floating_text("Perk Learned!",mouse,GOLD)
+   ,not has_p,has_p,"",12)
 
 func select_room(index: int) -> void:
  selected=index
@@ -550,14 +892,7 @@ func new_game() -> void:
  sim=Sim.new();selected=0;tab="Shelter";depth=0;speed=1;modal="";captured_outcome=false
  save_game(false);notify_user("A new beginning. Welcome to Shelter 07.")
 
-func play_click() -> void:
- if muted:return
- var wave=AudioStreamWAV.new();wave.format=AudioStreamWAV.FORMAT_16_BITS;wave.mix_rate=22050
- var samples=PackedByteArray();samples.resize(2205*2)
- for i in range(2205):
-  var v=int(sin(float(i)*TAU*660/22050)*exp(-float(i)/230.0)*4200)
-  samples.encode_s16(i*2,v)
- wave.data=samples;audio_player.stream=wave;audio_player.play()
+
 
 func _capture() -> void:
  await get_tree().process_frame
@@ -593,7 +928,7 @@ func _smoke() -> void:
  print("INPUT_SMOKE_OK: room selection, construction, staffing, navigation, research")
  for view in ["Shelter","Build","People","Research","Map"]:
   set_tab(view);queue_redraw();await get_tree().process_frame;await get_tree().process_frame
- for view in ["help","journal","menu","restart","victory","defeat"]:
+ for view in ["help","journal","menu","restart","victory","defeat","encounter","perk"]:
   modal=view;queue_redraw();await get_tree().process_frame;await get_tree().process_frame
  modal="";selected=5;set_tab("Research")
  for view in ["Shelter","Build","People","Research","Map"]:

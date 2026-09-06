@@ -219,13 +219,17 @@ func _execute(action: String, args: Dictionary) -> String:
   "speed":game.speed=int(args.rate)
   "step":
    if game.speed!=0:return "Pause before stepping."
+   if game.modal=="encounter":
+    game.sim.resolve_encounter(1);game.modal=""
    if game.modal!="":return "Dismiss the modal before stepping."
    if game.sim.outcome!="":return "The run has ended."
    game.sim.tick(float(args.seconds));game.sync_outcome()
   "select":game.select_room(int(args.room));game.depth=clampi(int(args.room/2)-2,0,2)
   "tab":game.set_tab(args.name)
   "depth":game.depth=int(args.value)
-  "dismiss":game.modal=""
+  "dismiss":
+   if game.modal=="encounter":game.sim.resolve_encounter(1)
+   game.modal=""
   "save":return game.save_game(false)
   "load":
    var error: String=game.load_game(false)
